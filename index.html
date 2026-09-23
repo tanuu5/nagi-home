@@ -44,6 +44,8 @@ h1{margin:0;font-family:"Mochiy Pop One",sans-serif;font-weight:400;font-size:22
 .talk input{flex:1;min-width:0;font:inherit;border:2px solid var(--line);border-radius:12px;padding:7px 10px;background:#fff;color:var(--ink)}
 .talk button{font:inherit;font-weight:700;border:0;background:var(--sea);color:#fff;border-radius:12px;padding:0 12px;cursor:pointer}
 #diary{list-style:none;margin:0;padding:0;font-size:13px}
+.reset{margin-top:12px;width:100%;font:inherit;font-size:12px;font-weight:700;color:var(--sub);background:transparent;border:2px dashed var(--line);border-radius:12px;padding:6px;cursor:pointer}
+.reset.armed{color:#fff;background:var(--coral);border:2px solid var(--coral)}
 #diary li{padding:5px 0;border-bottom:1px dashed var(--line);line-height:1.45}
 #diary time{color:var(--sea);font-weight:700;margin-right:6px;font-variant-numeric:tabular-nums}
 .stats{display:flex;gap:12px;font-size:13px;color:var(--sub)}
@@ -87,6 +89,7 @@ h1{margin:0;font-family:"Mochiy Pop One",sans-serif;font-weight:400;font-size:22
   <form class="talk" id="talk"><input id="talkIn" placeholder="こんにちは／すき／あそぼ…" maxlength="40"><button>送る</button></form>
   <h2>ナギの日記</h2>
   <ul id="diary"></ul>
+  <button id="bReset" class="reset">記録を消して最初から</button>
   <p class="help">ドラッグで視点を回転、ホイールやピンチで拡大縮小。ベッド・机・テーブル・お風呂・ソファ・ラジオ・窓・花壇がクリックできます。</p>
 </aside>
 <div id="bubble"></div>
@@ -452,7 +455,10 @@ const bubble=document.getElementById('bubble'); let bubbleT=0;
 function say(t, secs=2.8){ if(!t) return; bubble.textContent=t; bubble.classList.add('show'); bubbleT=secs; talkMouth=Math.min(secs,1.4); }
 let talkMouth=0;
 const diaryEl=document.getElementById('diary');
-function log(t){ const li=document.createElement('li'); li.innerHTML='<time>'+fmt(gameMin)+'</time>'; li.appendChild(document.createTextNode(t)); diaryEl.prepend(li); while(diaryEl.children.length>30) diaryEl.lastChild.remove(); }
+const diaryData=[]; // 新しい順
+function addDiary(time,text){ diaryData.unshift({t:time,text}); if(diaryData.length>30) diaryData.pop();
+  const li=document.createElement('li'); const tm=document.createElement('time'); tm.textContent=time; li.appendChild(tm); li.appendChild(document.createTextNode(text)); diaryEl.prepend(li); while(diaryEl.children.length>30) diaryEl.lastChild.remove(); }
+function log(t){ addDiary(fmt(gameMin), t); }
 
 /* ---------- パーティクル ---------- */
 const spriteCache={};
@@ -911,8 +917,40 @@ function updateBubble(rdt){
 }
 
 /* ---------- ループ ---------- */
-log('ナギのおうちへようこそ');
-setTimeout(()=>say('いらっしゃい！'),600);
+/* ---------- 保存と復元（localStorage） ---------- */
+const SAVE_KEY='nagi-home-v1'; let saveDisabled=false;
+function saveState(){
+  if(saveDisabled) return;
+  try{
+    const pos = (crab.perched && crab.act) ? crab.act.stand : C.root.position; // ベッドやソファの上なら降りた位置で記録
+    localStorage.setItem(SAVE_KEY, JSON.stringify({ v:1, need, gameMin, day, commits, lightsOn,
+      plants:plants.map(p=>({water:p.water,growth:p.growth})), crab:{x:pos.x,z:pos.z}, diary:diaryData, savedAt:Date.now() }));
+  }catch(e){ /* 保存できない環境では何もしない */ }
+}
+function loadState(){
+  let d=null; try{ d=JSON.parse(localStorage.getItem(SAVE_KEY)||'null'); }catch(e){ d=null; }
+  if(!d || d.v!==1) return false;
+  const num=v=>typeof v==='number' && isFinite(v);
+  Object.keys(need).forEach(k=>{ if(num(d.need?.[k])) need[k]=clamp(d.need[k],0,100); });
+  if(num(d.gameMin)) gameMin=d.gameMin; if(num(d.day)) day=d.day; if(num(d.commits)) commits=d.commits;
+  lightsOn=!!d.lightsOn;
+  plants.forEach((p,i)=>{ const q=d.plants?.[i]; if(q && num(q.water) && num(q.growth)){ p.water=q.water; p.growth=q.growth; } });
+  if(d.crab && num(d.crab.x) && num(d.crab.z)) C.root.position.set(d.crab.x, groundY(d.crab.x,d.crab.z), d.crab.z);
+  (Array.isArray(d.diary)?d.diary:[]).slice(0,30).reverse().forEach(e=>{ if(e && typeof e.text==='string') addDiary(String(e.t||''), e.text); });
+  lastHour=Math.floor(hour());
+  return true;
+}
+if(loadState()){ log('前回の続きから'); setTimeout(()=>say('おかえり！'),600); }
+else { log('ナギのおうちへようこそ'); setTimeout(()=>say('いらっしゃい！'),600); }
+setInterval(saveState, 5000);
+addEventListener('pagehide', saveState);
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') saveState(); });
+const bReset=document.getElementById('bReset'); let resetArmed=null;
+bReset.onclick=()=>{
+  if(!resetArmed){ bReset.textContent='もう一度押すと最初から'; bReset.classList.add('armed');
+    resetArmed=setTimeout(()=>{ resetArmed=null; bReset.textContent='記録を消して最初から'; bReset.classList.remove('armed'); },3000); return; }
+  saveDisabled=true; try{ localStorage.removeItem(SAVE_KEY); }catch(e){} location.reload();
+};
 let last=performance.now(), uiT=0;
 function frame(now){
   const rdt=Math.min(.05,(now-last)/1000); last=now;
